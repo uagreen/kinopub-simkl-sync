@@ -48,19 +48,31 @@ def test_authorize_url_carries_pkce_and_scope(tmp_path):
     assert "scope=media%3Aread+media%3Awrite" in url
 
 
-# -- callback parsing -------------------------------------------------------
+# -- pasted callback parsing -------------------------------------------------
 
 
-def test_parse_callback_query_extracts_code_and_state():
-    result = simkl._parse_callback_query("GET /callback?code=ABC&state=XYZ HTTP/1.1")
+def test_parse_pasted_callback_extracts_code_and_state_from_full_url():
+    result = simkl._parse_pasted_callback("http://localhost:8000/callback?code=ABC&state=XYZ")
 
     assert result == {"code": "ABC", "state": "XYZ"}
 
 
-def test_parse_callback_query_extracts_error():
-    result = simkl._parse_callback_query("GET /callback?error=access_denied&state=XYZ HTTP/1.1")
+def test_parse_pasted_callback_extracts_error_from_full_url():
+    result = simkl._parse_pasted_callback("http://localhost:8000/callback?error=access_denied&state=XYZ")
 
     assert result == {"error": "access_denied", "state": "XYZ"}
+
+
+def test_parse_pasted_callback_strips_surrounding_whitespace():
+    result = simkl._parse_pasted_callback("  http://localhost:8000/callback?code=ABC&state=XYZ  \n")
+
+    assert result == {"code": "ABC", "state": "XYZ"}
+
+
+def test_parse_pasted_callback_accepts_bare_code():
+    result = simkl._parse_pasted_callback("ABC123")
+
+    assert result == {"code": "ABC123"}
 
 
 # -- access token: stored / refresh -----------------------------------------

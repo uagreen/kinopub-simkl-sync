@@ -34,7 +34,6 @@ log = logging.getLogger(__name__)
 MAX_RATE_LIMIT_RETRIES = 5
 DEFAULT_RETRY_AFTER = 2
 REFRESH_SKEW_SECONDS = 60
-CALLBACK_TIMEOUT_SECONDS = 300
 AUTHORIZE_URL = "https://simkl.com/oauth2/authorize"
 SCOPE = "media:read media:write"
 
@@ -63,10 +62,15 @@ def _authorize_url(settings: Settings, *, code_challenge: str, state: str) -> st
     return f"{AUTHORIZE_URL}?{urlencode(params)}"
 
 
-def _parse_callback_query(request_line: str) -> dict[str, str]:
-    """The query string of a `GET /callback?...` request line, as a flat dict."""
-    target = request_line.split(" ")[1]
-    return dict(parse_qsl(urlsplit(target).query))
+def _parse_pasted_callback(pasted: str) -> dict[str, str]:
+    """What the user pastes back after authorizing: either the full redirect URL
+    (the browser can't load `http://localhost:.../callback`, but its address bar
+    still carries the query string) or, failing that, just the bare code."""
+    pasted = pasted.strip()
+    query = urlsplit(pasted).query
+    if query:
+        return dict(parse_qsl(query))
+    return {"code": pasted}
 
 
 class SimklClient:
@@ -89,45 +93,25 @@ class SimklClient:
 
     async def authorize(self) -> None:
         """Standard OAuth2 Authorization Code flow with PKCE: opens the browser at
-        simkl.com, catches the redirect on a local loopback server, and exchanges
-        the returned code for a token pair."""
-        redirect = urlsplit(self._settings.simkl_redirect_uri)
+        simkl.com and asks the user to paste back the resulting redirect URL. No
+        local listener, so this needs no open or forwarded port — the redirect
+        target (`SIMKL_REDIRECT_URI`, a loopback address by default) only has to
+        match what's registered with the app; nothing has to actually be
+        listening there. The browser will fail to load it, but its address bar
+        still carries the `code`/`state` query string, which is all we need."""
         verifier, challenge = _pkce_pair()
         state = secrets.token_urlsafe(16)
-        callback: dict[str, str] = {}
-        received = asyncio.Event()
-
-        async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-            try:
-                request_line = (await reader.readline()).decode()
-                while (await reader.readline()) not in (b"\r\n", b""):
-                    pass
-                callback.update(_parse_callback_query(request_line))
-                body = b"<html><body>Simkl authorized, you can close this tab.</body></html>"
-                writer.write(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: "
-                    + str(len(body)).encode()
-                    + b"\r\n\r\n"
-                    + body
-                )
-                await writer.drain()
-            finally:
-                writer.close()
-                received.set()
-
-        server = await asyncio.start_server(handle, redirect.hostname, redirect.port)
-        async with server:
-            url = _authorize_url(self._settings, code_challenge=challenge, state=state)
-            print(f"Open {url}")
-            webbrowser.open(url)
-            try:
-                await asyncio.wait_for(received.wait(), timeout=CALLBACK_TIMEOUT_SECONDS)
-            except TimeoutError as exc:
-                raise SimklError("timed out waiting for browser authorization") from exc
+        url = _authorize_url(self._settings, code_challenge=challenge, state=state)
+        print(f"Open {url}")
+        webbrowser.open(url)
+        pasted = await asyncio.to_thread(
+            input, "After authorizing, paste the redirect URL (or just the code) here: "
+        )
+        callback = _parse_pasted_callback(pasted)
 
         if "error" in callback:
             raise SimklError(f"authorization denied: {callback['error']}")
-        if callback.get("state") != state:
+        if "state" in callback and callback["state"] != state:
             raise SimklError("authorization failed: state mismatch")
         code = callback.get("code")
         if not code:

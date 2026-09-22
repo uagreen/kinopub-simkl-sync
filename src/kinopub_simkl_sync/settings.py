@@ -67,8 +67,9 @@ class Settings(BaseSettings):
     simkl_client_id: str = ""
     simkl_client_secret: str = ""
     # Must match the redirect URI registered for the app at
-    # simkl.com/settings/developer byte-for-byte. `kts auth simkl` briefly
-    # listens on this loopback address to catch the OAuth2 redirect.
+    # simkl.com/settings/developer byte-for-byte. Nothing needs to actually be
+    # listening on it — `kts auth simkl` has the user paste back the URL the
+    # browser lands on instead of catching the redirect itself.
     simkl_redirect_uri: str = "http://localhost:8000/callback"
 
     # MyShows has no device-code flow — password grant only. "apidoc"/"apidoc"

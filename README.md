@@ -86,7 +86,7 @@ Authorize once, then sync:
 
 ```bash
 uv run kts auth kinopub   # prints a code to enter at kino.pub/device
-uv run kts auth simkl     # opens simkl.com in your browser to authorize
+uv run kts auth simkl     # prints a simkl.com URL; paste back the resulting redirect URL
 uv run kts sync --dry-run # pull, plan, and report what would be pushed
 uv run kts sync           # the whole pipeline
 uv run kts status         # local state: dump age, pending pushes, authorization
@@ -110,21 +110,14 @@ OAuth2 v2 access token lasts 7 days and refreshes automatically; its refresh
 token lasts 180 days and resets on each use, so only 180 days of the sync
 never running requires `kts auth simkl` again. `kts status` reports both.
 
-**Running `kts auth simkl` on a headless/remote server:** it starts a
-loopback listener on `SIMKL_REDIRECT_URI` (`localhost:8000` by default) on
-the machine that runs the command, then prints a URL to open in a browser.
-If you open that URL on your *local* machine instead, Simkl's redirect back
-to `localhost:8000` resolves on your local machine too — where nothing is
-listening — so the callback never reaches the server and the command times
-out after 5 minutes (`timed out waiting for browser authorization`). Forward
-the port over SSH first, then run the command inside that same SSH session
-and open the printed URL locally as usual:
-
-```bash
-ssh -L 8000:localhost:8000 user@your-server
-# inside that session:
-uv run kts auth simkl
-```
+**Running `kts auth simkl` on a headless/remote server:** it never opens a
+port — `kts auth simkl` prints the simkl.com URL, which you can open in any
+browser on any device. After you authorize, the browser tries to load
+`SIMKL_REDIRECT_URI` (`http://localhost:8000/callback` by default) and fails
+to — nothing is listening there — but its address bar still shows the full
+URL with `code`/`state` in the query string. Copy that URL from the address
+bar and paste it back at the prompt on the server; no SSH tunnel or open
+port required.
 
 ## Behavior notes
 
