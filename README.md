@@ -110,6 +110,22 @@ OAuth2 v2 access token lasts 7 days and refreshes automatically; its refresh
 token lasts 180 days and resets on each use, so only 180 days of the sync
 never running requires `kts auth simkl` again. `kts status` reports both.
 
+**Running `kts auth simkl` on a headless/remote server:** it starts a
+loopback listener on `SIMKL_REDIRECT_URI` (`localhost:8000` by default) on
+the machine that runs the command, then prints a URL to open in a browser.
+If you open that URL on your *local* machine instead, Simkl's redirect back
+to `localhost:8000` resolves on your local machine too — where nothing is
+listening — so the callback never reaches the server and the command times
+out after 5 minutes (`timed out waiting for browser authorization`). Forward
+the port over SSH first, then run the command inside that same SSH session
+and open the printed URL locally as usual:
+
+```bash
+ssh -L 8000:localhost:8000 user@your-server
+# inside that session:
+uv run kts auth simkl
+```
+
 ## Behavior notes
 
 - **Idempotent.** Simkl does not dedupe history plays, so every pushed entry is
