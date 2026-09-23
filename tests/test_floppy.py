@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from kinopub_simkl_sync.floppy import FloppyClient, FloppyError
+from kinopub_simkl_sync.floppy import FloppyClient, FloppyError, FloppyNotFoundError
 from kinopub_simkl_sync.settings import Paths, Settings
 from kinopub_simkl_sync.storage import read_json, write_json
 
@@ -144,6 +144,34 @@ async def test_watch_movie_raises_on_error_status(tmp_path):
     async with _client(settings, floppy_handler=floppy_handler) as client:
         with pytest.raises(FloppyError, match="404"):
             await client.watch_movie(641, end_date=None, external_id="kinopub:1")
+
+
+@pytest.mark.asyncio
+async def test_watch_episode_raises_not_found_with_detail_on_404(tmp_path):
+    settings = _settings(tmp_path)
+
+    def floppy_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "Episode not found."})
+
+    async with _client(settings, floppy_handler=floppy_handler) as client:
+        with pytest.raises(FloppyNotFoundError) as excinfo:
+            await client.watch_episode(1400, 0, 1, end_date=None, external_id="kinopub:9:0:1")
+
+    assert excinfo.value.detail == "Episode not found."
+
+
+@pytest.mark.asyncio
+async def test_watch_movie_error_other_than_404_is_not_not_found(tmp_path):
+    settings = _settings(tmp_path)
+
+    def floppy_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    async with _client(settings, floppy_handler=floppy_handler) as client:
+        with pytest.raises(FloppyError, match="500") as excinfo:
+            await client.watch_movie(641, end_date=None, external_id="kinopub:1")
+
+    assert not isinstance(excinfo.value, FloppyNotFoundError)
 
 
 @pytest.mark.asyncio

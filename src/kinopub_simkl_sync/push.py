@@ -22,7 +22,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .floppy import FloppyClient
+from .floppy import FloppyClient, FloppyNotFoundError
 from .models import EpisodeWatch, MovieWatch, Plan
 from .myshows import MyShowsClient
 from .simkl import SimklClient
@@ -135,7 +135,11 @@ async def push_floppy(
     stable `external_id`, which makes a replayed call idempotent server-side
     on top of the local push_state skip. No write_interval pause between
     calls: unlike Simkl/MyShows this is a self-hosted instance the user
-    controls, not a shared service with a remote rate limit to respect."""
+    controls, not a shared service with a remote rate limit to respect.
+
+    A 404 from a watch call (Floppy could not resolve that title/episode) is
+    recorded in not_found and the run carries on; the entry is not marked
+    pushed, so it is retried next run in case TMDB catches up."""
     movies = [movie for movie in plan.movies if movie not in state]
     episodes_by_show = group_episodes_by_imdb([e for e in plan.episodes if e not in state])
     print(f"movies: {len(movies)} to push, {len(plan.movies) - len(movies)} already synced")
@@ -154,7 +158,20 @@ async def push_floppy(
             state.save(state_path)
             continue
         end_date = None if movie.watched_at == WATCHED_AT_UNKNOWN else movie.watched_at
-        await client.watch_movie(tmdb_id, end_date=end_date, external_id=f"kinopub:{movie.kinopub_id}")
+        try:
+            await client.watch_movie(tmdb_id, end_date=end_date, external_id=f"kinopub:{movie.kinopub_id}")
+        except FloppyNotFoundError as error:
+            _note_not_found(
+                state,
+                {
+                    "imdb": movie.imdb,
+                    "tmdb": tmdb_id,
+                    "title": movie.title,
+                    "reason": f"floppy 404: {error.detail}",
+                },
+            )
+            state.save(state_path)
+            continue
         state.record([movie])
         state.save(state_path)
 
@@ -175,18 +192,38 @@ async def push_floppy(
             continue
         for entry in entries:
             end_date = None if entry.watched_at == WATCHED_AT_UNKNOWN else entry.watched_at
-            await client.watch_episode(
-                tmdb_id,
-                entry.season,
-                entry.episode,
-                end_date=end_date,
-                external_id=f"kinopub:{entry.kinopub_id}:{entry.season}:{entry.episode}",
-            )
+            try:
+                await client.watch_episode(
+                    tmdb_id,
+                    entry.season,
+                    entry.episode,
+                    end_date=end_date,
+                    external_id=f"kinopub:{entry.kinopub_id}:{entry.season}:{entry.episode}",
+                )
+            except FloppyNotFoundError as error:
+                _note_not_found(
+                    state,
+                    {
+                        "imdb": imdb,
+                        "tmdb": tmdb_id,
+                        "title": entry.title,
+                        "season": entry.season,
+                        "episode": entry.episode,
+                        "reason": f"floppy 404: {error.detail}",
+                    },
+                )
+                continue
             state.record([entry])
         state.save(state_path)
 
     if state.not_found:
         print(f"not found on Floppy: {len(state.not_found)} (see push_state_floppy.json)")
+
+
+def _note_not_found(state: PushState, entry: dict[str, Any]) -> None:
+    """Retried 404s would otherwise append the same entry on every run."""
+    if entry not in state.not_found:
+        state.not_found.append(entry)
 
 
 def group_episodes_by_imdb(episodes: list[EpisodeWatch]) -> dict[str, list[EpisodeWatch]]:

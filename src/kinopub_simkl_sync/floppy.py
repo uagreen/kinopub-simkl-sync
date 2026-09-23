@@ -35,6 +35,16 @@ class FloppyError(RuntimeError):
     pass
 
 
+class FloppyNotFoundError(FloppyError):
+    """A watch call Floppy answered with 404: it could not resolve the title
+    or episode (typically kino.pub numbering a special/season that TMDB lacks).
+    Per-entry, not fatal — push_floppy records it and moves on."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"HTTP 404: {detail}")
+        self.detail = detail
+
+
 class FloppyClient:
     def __init__(self, settings: Settings) -> None:
         if not settings.floppy_url:
@@ -116,5 +126,15 @@ class FloppyClient:
         if end_date is not None:
             body["end_date"] = end_date
         response = await self._http.post(path, json=body)
+        if response.status_code == HTTPStatus.NOT_FOUND:
+            raise FloppyNotFoundError(_detail(response))
         if response.status_code not in (HTTPStatus.OK, HTTPStatus.CREATED):
             raise FloppyError(f"{path} failed: HTTP {response.status_code}: {response.text}")
+
+
+def _detail(response: httpx.Response) -> str:
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        detail = None
+    return str(detail) if detail else response.text

@@ -1,5 +1,6 @@
 import pytest
 
+from kinopub_simkl_sync.floppy import FloppyNotFoundError
 from kinopub_simkl_sync.models import EpisodeWatch, MovieWatch, Plan
 from kinopub_simkl_sync.push import (
     PushState,
@@ -169,8 +170,16 @@ def _fp_episode(
 
 
 class FakeFloppy:
-    def __init__(self, tmdb_ids: dict[tuple[str, str], int | None]):
+    def __init__(
+        self,
+        tmdb_ids: dict[tuple[str, str], int | None],
+        *,
+        missing_movies: frozenset[int] = frozenset(),
+        missing_episodes: frozenset[tuple[int, int, int]] = frozenset(),
+    ):
         self.tmdb_ids = tmdb_ids
+        self.missing_movies = missing_movies
+        self.missing_episodes = missing_episodes
         self.movie_watches: list[tuple[int, str | None, str]] = []
         self.episode_watches: list[tuple[int, int, int, str | None, str]] = []
 
@@ -178,11 +187,15 @@ class FakeFloppy:
         return self.tmdb_ids.get((kind, imdb_id))
 
     async def watch_movie(self, tmdb_id: int, *, end_date: str | None, external_id: str) -> None:
+        if tmdb_id in self.missing_movies:
+            raise FloppyNotFoundError("Could not resolve movie.")
         self.movie_watches.append((tmdb_id, end_date, external_id))
 
     async def watch_episode(
         self, tmdb_id: int, season: int, episode: int, *, end_date: str | None, external_id: str
     ) -> None:
+        if (tmdb_id, season, episode) in self.missing_episodes:
+            raise FloppyNotFoundError("Episode not found.")
         self.episode_watches.append((tmdb_id, season, episode, end_date, external_id))
 
 
@@ -255,6 +268,62 @@ async def test_push_floppy_records_unmatched_show_for_all_its_episodes(tmp_path)
     assert client.episode_watches == []
     assert len(state.not_found) == 2
     assert all(entry["reason"] == "no tmdb match for this imdb id" for entry in state.not_found)
+
+
+@pytest.mark.asyncio
+async def test_push_floppy_records_floppy_404_episode_and_continues(tmp_path):
+    episodes = [_fp_episode("tt1", 1, 0, 1), _fp_episode("tt1", 1, 1, 1), _fp_episode("tt3", 3, 1, 1)]
+    client = FakeFloppy(
+        {("tv", "tt1"): 1400, ("tv", "tt3"): 1500}, missing_episodes=frozenset({(1400, 0, 1)})
+    )
+    state = PushState()
+    state_path = tmp_path / "push_state_floppy.json"
+
+    await push_floppy(Plan(episodes=episodes), client, state, state_path, dry_run=False)
+
+    assert [(w[0], w[1], w[2]) for w in client.episode_watches] == [(1400, 1, 1), (1500, 1, 1)]
+    assert episodes[0].state_key not in state.pushed
+    assert {episodes[1].state_key, episodes[2].state_key} <= set(state.pushed)
+    assert state.not_found == [
+        {
+            "imdb": "tt1",
+            "tmdb": 1400,
+            "title": "Show",
+            "season": 0,
+            "episode": 1,
+            "reason": "floppy 404: Episode not found.",
+        }
+    ]
+    assert PushState.load(state_path).not_found == state.not_found
+
+
+@pytest.mark.asyncio
+async def test_push_floppy_records_floppy_404_movie_and_continues(tmp_path):
+    missing, ok = _movie("tt1", 1), _movie("tt2", 2)
+    client = FakeFloppy({("movie", "tt1"): 10, ("movie", "tt2"): 20}, missing_movies=frozenset({10}))
+    state = PushState()
+    state_path = tmp_path / "push_state_floppy.json"
+
+    await push_floppy(Plan(movies=[missing, ok]), client, state, state_path, dry_run=False)
+
+    assert [w[0] for w in client.movie_watches] == [20]
+    assert missing.state_key not in state.pushed
+    assert state.not_found == [
+        {"imdb": "tt1", "tmdb": 10, "title": "Movie", "reason": "floppy 404: Could not resolve movie."}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_push_floppy_does_not_duplicate_not_found_on_rerun(tmp_path):
+    episodes = [_fp_episode("tt1", 1, 0, 1)]
+    client = FakeFloppy({("tv", "tt1"): 1400}, missing_episodes=frozenset({(1400, 0, 1)}))
+    state = PushState()
+    state_path = tmp_path / "push_state_floppy.json"
+
+    await push_floppy(Plan(episodes=episodes), client, state, state_path, dry_run=False)
+    await push_floppy(Plan(episodes=episodes), client, state, state_path, dry_run=False)
+
+    assert len(state.not_found) == 1
 
 
 @pytest.mark.asyncio

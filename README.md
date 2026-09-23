@@ -196,7 +196,10 @@ id first, via TMDB's public "find by external id" endpoint
 Setup). Resolved ids (and confirmed non-matches, so an untracked title isn't
 re-queried every run) are cached in `data/tmdb_cache.json`. A title with no
 TMDB listing lands in `push_state_floppy.json`'s `not_found` list rather than
-being skipped silently.
+being skipped silently. So does any movie or episode Floppy itself answers
+with a 404 (typically a special or season numbering kino.pub has but TMDB
+doesn't): it is recorded with Floppy's `detail` message, the rest of the run
+carries on, and the entry is retried next run.
 
 Each watch call also carries a stable `external_id` derived from the kino.pub
 item id (`kinopub:{id}` for a movie, `kinopub:{id}:{season}:{episode}` for an
